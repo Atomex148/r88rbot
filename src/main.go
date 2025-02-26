@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"log"
 	"os"
 	"strings"
@@ -48,6 +47,7 @@ func main() {
 	defer saveRoors("./roors.txt", roors)
 
 	players = *initPlayers("./players.json")
+	players.startDailyReset()
 	defer players.Save()
 
 	var bot *telego.Bot
@@ -91,19 +91,8 @@ func main() {
 
 	updates, _ := bot.UpdatesViaLongPolling(params)
 	defer bot.StopLongPolling()
-	log.Printf("Рурбот v%s запущен. \"exit\" чтоб завершить", version)
-
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			cmd := strings.TrimSpace(scanner.Text())
-			if cmd == "exit" {
-				log.Println("Завершение работы бота...")
-				bot.StopLongPolling()
-				return
-			}
-		}
-	}()
+	log.Printf("Рурбот v%s запущен. \"exit\" чтоб завершить, \"help\" для помощи", version)
+	go cmdInput(bot)
 
 	for update := range updates {
 		processing(&update, bot)

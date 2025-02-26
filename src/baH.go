@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	telego "github.com/mymmrac/telego"
 )
@@ -19,31 +21,52 @@ type Player struct {
 }
 
 type PlayerStorage struct {
-	Players  []Player `json:"players"`
-	FilePath string
+	Players     []Player  `json:"players"`
+	LastUpdated time.Time `json:"lastUpdated"`
+	FilePath    string
+	mu          sync.RWMutex
 }
 
 func initPlayers(filePath string) *PlayerStorage {
-	storage := &PlayerStorage{[]Player{}, filePath}
+	storage := &PlayerStorage{
+		FilePath:    filePath,
+		LastUpdated: time.Now(),
+	}
 
-	if _, err := os.Stat(filePath); err == nil {
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			log.Printf("Ошибка при чтении файла: %v", err)
-			return storage
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		if err := storage.Save(); err != nil {
+			log.Printf("Ошибка при создании файла игроков: %v", err)
 		}
+		log.Println("Создан новый файл конфигураций игроков")
+		return storage
+	}
 
-		err = json.Unmarshal(data, &storage.Players)
-		if err != nil {
-			log.Printf("Ошибка при разборе JSON: %v", err)
-			return storage
-		}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("Ошибка при чтении файла: %v", err)
+		return storage
+	}
+
+	if err = json.Unmarshal(data, storage); err != nil {
+		log.Printf("Ошибка при разборе JSON: %v", err)
+	}
+
+	if time.Since(storage.LastUpdated) > 24*time.Hour {
+		storage.resetPlayers()
 	}
 
 	return storage
 }
 
 func loadRoors(filename string) []bool {
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		initialData := strings.Repeat("0, ", 99) + "0"
+		if err := os.WriteFile(filename, []byte(initialData), 0644); err != nil {
+			log.Panicf("Ошибка создания файла руров: %v", err)
+		}
+		log.Println("Создан новый файл 100шт руров")
+	}
+
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		log.Panic("Ошибка загрузки руров: ", err)
@@ -86,12 +109,53 @@ func saveRoors(filepath string, r []bool) {
 }
 
 func (s *PlayerStorage) Save() error {
-	data, err := json.MarshalIndent(s.Players, "", "  ")
+	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(s.FilePath, data, 0644)
+}
+
+func (s *PlayerStorage) resetPlayers() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.Players {
+		s.Players[i].HasPlayed = false
+	}
+	s.LastUpdated = time.Now()
+	log.Println("Автоматический сброс статусов игроков")
+	s.Save()
+}
+
+func (s *PlayerStorage) resetAllPlayers() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.Players {
+		s.Players[i].HasPlayed = false
+		s.Players[i].Score = 0
+	}
+	s.LastUpdated = time.Now()
+
+	if err := s.Save(); err != nil {
+		log.Printf("Ошибка при полном сбросе: %v", err)
+	} else {
+		log.Println("Полный сброс игроков выполнен")
+	}
+}
+
+func (s *PlayerStorage) startDailyReset() {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for range ticker.C {
+			now := time.Now()
+			if now.Hour() == 21 && now.Minute() == 0 {
+				s.resetPlayers()
+			}
+		}
+	}()
 }
 
 func (s *PlayerStorage) FindPlayer(id int64) (Player, int, bool) {
@@ -104,6 +168,9 @@ func (s *PlayerStorage) FindPlayer(id int64) (Player, int, bool) {
 }
 
 func (s *PlayerStorage) AddPlayer(id int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	_, _, found := s.FindPlayer(id)
 	if found {
 		log.Printf("Игрок с ID %d уже существует", id)
@@ -124,6 +191,9 @@ func (s *PlayerStorage) AddPlayer(id int64) {
 }
 
 func (s *PlayerStorage) UpdatePlayer(id int64, hasPlayed bool, newScore int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	_, index, found := s.FindPlayer(id)
 	if !found {
 		log.Printf("Игрок с ID %d не найден", id)
@@ -141,6 +211,9 @@ func (s *PlayerStorage) UpdatePlayer(id int64, hasPlayed bool, newScore int) {
 }
 
 func (s *PlayerStorage) GetScore(id int64) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	_, index, found := s.FindPlayer(id)
 	if !found {
 		log.Printf("Игрок с ID %d не найден", id)
@@ -151,12 +224,24 @@ func (s *PlayerStorage) GetScore(id int64) int {
 }
 
 func (s *PlayerStorage) CheckPlayer(id int64) (exists bool, hasPlayed bool) {
-	player, _, found := s.FindPlayer(id)
-	if !found {
-		return false, false
+	s.mu.RLock()
+	needsReset := time.Since(s.LastUpdated) > 24*time.Hour
+	s.mu.RUnlock()
+
+	if needsReset {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if time.Since(s.LastUpdated) > 24*time.Hour {
+			s.resetPlayers()
+		}
 	}
 
-	return true, player.HasPlayed
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	player, _, found := s.FindPlayer(id)
+	return found, player.HasPlayed
 }
 
 func baH(update *telego.Update, bot *telego.Bot) {
@@ -190,7 +275,7 @@ func baH(update *telego.Update, bot *telego.Bot) {
 		msg := fmt.Sprintf("%s, Tbl <b><i>pa3abaHuJl</i></b> pypa №%d. TBou c4eT: <b>%d</b> (+0)", name, index, players.GetScore(playerId))
 		sendFormattedText(bot, update.Message.Chat.ID, msg)
 	} else {
-		msg := fmt.Sprintf("%s, Tbl <b><i>y>l<e baHuJl</i></b> pypa. TBou c4eT: <b>%d</b>", name, players.GetScore(playerId))
+		msg := fmt.Sprintf("%s, Tbl <b><i>y}I{e baHuJl</i></b> pypa. TBou c4eT: <b>%d</b>", name, players.GetScore(playerId))
 		sendFormattedText(bot, update.Message.Chat.ID, msg)
 	}
 
