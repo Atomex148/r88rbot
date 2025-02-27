@@ -2,8 +2,10 @@ package main
 
 import (
 	"log"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 
 	telego "github.com/mymmrac/telego"
 )
@@ -13,14 +15,16 @@ const (
     /pyp_xeJln, /roor_help - onucaHue KoMaHD
     /pyp_nopHo, /roor_porno - oTnpaBTb KapTuHKy c KoLLIKoMaJlm4uKoM
     /pyp_pJlaKaT, /roor_plakat - noHbITb
-	/pyp_baH, /roor_ban - 3abaHuTb pypa`
+	/pyp_baH, /roor_ban - 3abaHuTb pypa
+	/pyp_Ton, /roor_top - Ton baHepoB`
 
-	version = "1.0"
+	version = "1.1"
 )
 
 var (
 	players PlayerStorage
 	roors   []bool
+	rng     = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 func hasArg(target string) bool {
@@ -82,6 +86,10 @@ func main() {
 			Command:     "roor_ban",
 			Description: "3abaHuTb pypa",
 		},
+		{
+			Command:     "roor_top",
+			Description: "Ton baHepoB",
+		},
 	}
 
 	err = bot.SetMyCommands(&telego.SetMyCommandsParams{Commands: commands})
@@ -92,6 +100,7 @@ func main() {
 	updates, _ := bot.UpdatesViaLongPolling(params)
 	defer bot.StopLongPolling()
 	log.Printf("Рурбот v%s запущен. \"exit\" чтоб завершить, \"help\" для помощи", version)
+
 	go cmdInput(bot)
 
 	for update := range updates {
@@ -140,6 +149,8 @@ func processing(update *telego.Update, bot *telego.Bot) {
 		}
 	case "roor_ban", "pyp_baH":
 		baH(update, bot)
+	case "roor_top", "pyp_Ton":
+		sendFormattedText(bot, chatID, players.getTop())
 	default:
 		return
 	}

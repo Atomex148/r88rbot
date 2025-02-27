@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,14 +16,16 @@ import (
 )
 
 type Player struct {
-	ID        int64 `json:"id"`
-	HasPlayed bool  `json:"hasPlayed"`
-	Score     int   `json:"score"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	HasPlayed bool   `json:"hasPlayed"`
+	Score     int    `json:"score"`
 }
 
 type PlayerStorage struct {
 	Players     []Player  `json:"players"`
 	LastUpdated time.Time `json:"lastUpdated"`
+	BannedPypc  int       `json:"bannedPypc"`
 	FilePath    string
 	mu          sync.RWMutex
 }
@@ -108,6 +111,16 @@ func saveRoors(filepath string, r []bool) {
 	}
 }
 
+func updateBannedCount(r []bool) int {
+	count := 0
+	for _, b := range r {
+		if b {
+			count++
+		}
+	}
+	return count
+}
+
 func (s *PlayerStorage) Save() error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -138,11 +151,16 @@ func (s *PlayerStorage) resetAllPlayers() {
 		s.Players[i].Score = 0
 	}
 	s.LastUpdated = time.Now()
+	s.BannedPypc = 0
 
 	if err := s.Save(); err != nil {
 		log.Printf("Ошибка при полном сбросе: %v", err)
 	} else {
 		log.Println("Полный сброс игроков выполнен")
+	}
+
+	for i := 0; i < len(roors); i++ {
+		roors[i] = false
 	}
 }
 
@@ -167,9 +185,9 @@ func (s *PlayerStorage) FindPlayer(id int64) (Player, int, bool) {
 	return Player{}, -1, false
 }
 
-func (s *PlayerStorage) AddPlayer(id int64) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *PlayerStorage) AddPlayer(id int64, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, _, found := s.FindPlayer(id)
 	if found {
@@ -179,6 +197,7 @@ func (s *PlayerStorage) AddPlayer(id int64) {
 
 	s.Players = append(s.Players, Player{
 		ID:        id,
+		Name:      name,
 		HasPlayed: false,
 		Score:     0,
 	})
@@ -191,8 +210,8 @@ func (s *PlayerStorage) AddPlayer(id int64) {
 }
 
 func (s *PlayerStorage) UpdatePlayer(id int64, hasPlayed bool, newScore int) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, index, found := s.FindPlayer(id)
 	if !found {
@@ -211,8 +230,8 @@ func (s *PlayerStorage) UpdatePlayer(id int64, hasPlayed bool, newScore int) {
 }
 
 func (s *PlayerStorage) GetScore(id int64) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, index, found := s.FindPlayer(id)
 	if !found {
@@ -223,10 +242,57 @@ func (s *PlayerStorage) GetScore(id int64) int {
 	return s.Players[index].Score
 }
 
+func (s *PlayerStorage) getTop() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	playersTop := make([]Player, len(s.Players))
+	copy(playersTop, s.Players)
+
+	sort.Slice(playersTop, func(i, j int) bool {
+		return playersTop[i].Score > playersTop[j].Score
+	})
+
+	limit := 10
+	if len(playersTop) < limit {
+		limit = len(playersTop)
+	}
+
+	if len(playersTop) == 0 {
+		return "<b>PeuTuHG nycT</b>"
+	}
+
+	var msgBuilder strings.Builder
+	msgBuilder.WriteString("Топ baHepoB:\n")
+	for i, p := range playersTop {
+		if p.Score != 0 {
+			msgBuilder.WriteString(
+				fmt.Sprintf("\n<b>%d</b>. <b>%s: %d o4KoB</b>", i+1, p.Name, p.Score),
+			)
+		}
+	}
+	msg := msgBuilder.String()
+	return msg
+}
+
+func (s *PlayerStorage) getWinner() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	playersTop := make([]Player, len(s.Players))
+	copy(playersTop, s.Players)
+
+	sort.Slice(playersTop, func(i, j int) bool {
+		return playersTop[i].Score > playersTop[j].Score
+	})
+
+	return fmt.Sprintf("<b>%s nobeDul, 3abanuB boJlbwe Bcego pypoB. OH 3abaHuJI %d pypoB!</b>", playersTop[0].Name, playersTop[0].Score)
+}
+
 func (s *PlayerStorage) CheckPlayer(id int64) (exists bool, hasPlayed bool) {
-	s.mu.RLock()
+	s.mu.Lock()
 	needsReset := time.Since(s.LastUpdated) > 24*time.Hour
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	if needsReset {
 		s.mu.Lock()
@@ -237,8 +303,8 @@ func (s *PlayerStorage) CheckPlayer(id int64) (exists bool, hasPlayed bool) {
 		}
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	player, _, found := s.FindPlayer(id)
 	return found, player.HasPlayed
@@ -263,22 +329,33 @@ func baH(update *telego.Update, bot *telego.Bot) {
 	exists, played := players.CheckPlayer(playerId)
 
 	if !exists {
-		players.AddPlayer(playerId)
+		players.AddPlayer(playerId, name)
 	}
 
 	if !roors[index] && !played {
 		players.UpdatePlayer(playerId, !played, players.GetScore(playerId)+1)
-		msg := fmt.Sprintf("%s, Tbl <b><i>3abaHuJl</i></b> pypa №%d. TBou c4eT: <b>%d</b> (+1)", name, index, players.GetScore(playerId))
+		msg := fmt.Sprintf("%s, Tbl <b><i>3abaHuJl</i></b> pypa №%d. TBou c4eT: <b>%d</b> (+1)", name, index+1, players.GetScore(playerId))
 		sendFormattedText(bot, update.Message.Chat.ID, msg)
+		roors[index] = !roors[index]
 	} else if roors[index] && !played {
 		players.UpdatePlayer(playerId, !played, players.GetScore(playerId))
-		msg := fmt.Sprintf("%s, Tbl <b><i>pa3abaHuJl</i></b> pypa №%d. TBou c4eT: <b>%d</b> (+0)", name, index, players.GetScore(playerId))
+		msg := fmt.Sprintf("%s, Tbl <b><i>pa3abaHuJl</i></b> pypa №%d. TBou c4eT: <b>%d</b> (+0)", name, index+1, players.GetScore(playerId))
 		sendFormattedText(bot, update.Message.Chat.ID, msg)
+		roors[index] = !roors[index]
 	} else {
 		msg := fmt.Sprintf("%s, Tbl <b><i>y}I{e baHuJl</i></b> pypa. TBou c4eT: <b>%d</b>", name, players.GetScore(playerId))
 		sendFormattedText(bot, update.Message.Chat.ID, msg)
 	}
 
-	roors[index] = !roors[index]
+	players.BannedPypc = updateBannedCount(roors)
+
+	if players.BannedPypc == len(roors) {
+		msgWin := players.getWinner()
+		msgWin += "\n--------------------\n" + players.getTop()
+		players.resetAllPlayers()
+
+		sendFormattedText(bot, update.Message.Chat.ID, msgWin)
+	}
+
 	saveRoors(".\\roors.txt", roors)
 }

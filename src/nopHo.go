@@ -2,15 +2,36 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
-	"strconv"
-	"time"
 
 	telego "github.com/mymmrac/telego"
 )
+
+type CircularBuffer struct {
+	data  [12]int
+	index int
+	size  int
+}
+
+func (cb *CircularBuffer) Add(num int) {
+	cb.data[cb.index] = num
+	cb.index = (cb.index + 1) % len(cb.data)
+	if cb.size < len(cb.data) {
+		cb.size++
+	}
+}
+
+func (cb *CircularBuffer) Contains(num int) bool {
+	for i := 0; i < cb.size; i++ {
+		if cb.data[i] == num {
+			return true
+		}
+	}
+	return false
+}
 
 type GelbooruPost struct {
 	ID      int    `json:"id"`
@@ -21,21 +42,28 @@ type GelbooruResponse struct {
 	Posts []GelbooruPost `json:"post"`
 }
 
+var alreadyWas CircularBuffer
+
+func getUniquePost(posts []GelbooruPost) GelbooruPost {
+	for {
+		post := posts[rand.Intn(len(posts))]
+
+		if alreadyWas.Contains(post.ID) {
+			continue
+		}
+
+		alreadyWas.Add(post.ID)
+		return post
+	}
+}
+
+const maxPages = 62
+
 func nopHo(chatId int64, bot *telego.Bot) {
-	baseURL := "https://gelbooru.com/index.php"
-	params := url.Values{}
-	params.Set("page", "dapi")
-	params.Set("s", "post")
-	params.Set("q", "index")
-	params.Set("tags", "cat_ears 1boy -1girl -hetero boys_only")
-	params.Set("sort", "random")
-	params.Set("limit", "100")
-	params.Set("json", "1")
+	baseURL := fmt.Sprintf("https://gelbooru.com/index.php?pid=%d&json=1&limit=42&page=dapi&q=index&s=post&tags=cat_ears+yaoi", rand.Intn(maxPages))
 
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	params.Set("after_id", strconv.Itoa(rand.Intn(5000000)+1))
-
-	response, err := http.Get(baseURL + "?" + params.Encode())
+	fmt.Println(baseURL)
+	response, err := http.Get(baseURL)
 	if err != nil {
 		log.Println("Ошибка запроса:", err)
 		return
@@ -54,14 +82,11 @@ func nopHo(chatId int64, bot *telego.Bot) {
 	}
 
 	if len(result.Posts) == 0 {
-		log.Println("Нет результатов, пробуем без after_id")
-		params.Del("after_id")
-		nopHo(chatId, bot)
+		log.Println("Ошибка получения постов")
 		return
 	}
 
-	post := result.Posts[rand.Intn(len(result.Posts))]
-
+	post := getUniquePost(result.Posts)
 	_, err = bot.SendPhoto(&telego.SendPhotoParams{
 		ChatID: telego.ChatID{ID: chatId},
 		Photo:  telego.InputFile{URL: post.FileURL},
