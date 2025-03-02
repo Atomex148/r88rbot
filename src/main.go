@@ -2,12 +2,11 @@ package main
 
 import (
 	"log"
-	"math/rand"
 	"os"
 	"strings"
-	"time"
 
 	telego "github.com/mymmrac/telego"
+	"slices"
 )
 
 const (
@@ -16,24 +15,19 @@ const (
     /pyp_nopHo, /roor_porno - oTnpaBTb KapTuHKy c KoLLIKoMaJlm4uKoM
     /pyp_pJlaKaT, /roor_plakat - noHbITb
 	/pyp_baH, /roor_ban - 3abaHuTb pypa
-	/pyp_Ton, /roor_top - Ton baHepoB`
+	/pyp_Ton, /roor_top - Ton baHepoB
+	/pyp_bJIagocJIoBJIReT, /roor_bless - bJIagocJIoBuTb`
 
-	version = "1.1"
+	version = "1.2"
 )
 
 var (
 	players PlayerStorage
 	roors   []bool
-	rng     = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 func hasArg(target string) bool {
-	for _, arg := range os.Args[1:] {
-		if arg == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(os.Args[1:], target)
 }
 
 func main() {
@@ -89,6 +83,10 @@ func main() {
 		{
 			Command:     "roor_top",
 			Description: "Ton baHepoB",
+		},
+		{
+			Command:     "roor_bless",
+			Description: "bJIagocJIoBuTb",
 		},
 	}
 
@@ -151,6 +149,8 @@ func processing(update *telego.Update, bot *telego.Bot) {
 		baH(update, bot)
 	case "roor_top", "pyp_Ton":
 		sendFormattedText(bot, chatID, players.getTop())
+	case "roor_bless", "pyp_bJIagocJIoBJIReT":
+		players.BlessPlayer(update, bot)
 	default:
 		return
 	}
